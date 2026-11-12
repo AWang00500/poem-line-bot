@@ -26,13 +26,12 @@ handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 def fetch_from_wikisource(poem_name):
     """
-    使用維基文庫官方 API 搜尋並抓取詩詞內容，
-    有效解決傳統 BeautifulSoup 爬蟲因網頁排版不一而抓不準的問題。
+    使用維基文庫 API 搜尋，若有多筆結果會先提示使用者，
+    並直接在下方顯示最相關的第一筆內容。
     """
     headers = {"User-Agent": "PoemBot/1.0 (Personal Line Bot)"}
-
-    # 1. 先透過 MediaWiki API 進行搜尋，找出最正確的頁面標題
     search_url = "https://zh.wikisource.org/w/api.php"
+
     search_params = {
         "action": "query",
         "list": "search",
@@ -51,64 +50,55 @@ def fetch_from_wikisource(poem_name):
                 f"找不到《{poem_name}》。請確認是否有錯別字，或嘗試輸入「詩名(作者)」"
             )
 
+        # 檢查是否有超過一筆搜尋結果
+        multiple_hint = ""
+        if len(search_results) > 1:
+            # 抓出前幾筆的標題讓使用者知道還有其他版本
+            titles = [item["title"] for item in search_results[:3]]
+            multiple_hint = (
+                f"🔍 找到多筆相關內容（例如：{', '.join(titles)} 等），以下為您直接顯示第一筆：\n"
+                + "—" * 15
+                + "\n\n"
+            )
+
         # 取得最相關的第一筆標題
         best_title = search_results[0]["title"]
 
-        # 2. 取得該頁面的完整 HTML 內容來解析內文與消歧義
-        page_url = f"https://zh.wikisource.org/wiki/{best_title}"
-        response = requests.get(page_url, headers=headers, timeout=5)
+        # 透過 parse API 取得頁面乾淨純文字
+        parse_params = {
+            "action": "parse",
+            "page": best_title,
+            "prop": "text",
+            "format": "json",
+            "utf8": 1,
+        }
+        parse_res = requests.get(
+            search_url, params=parse_params, headers=headers, timeout=5
+        )
+        parse_data = parse_res.json()
 
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, "html.parser")
-            main_output = soup.find("div", class_="mw-parser-output")
+        if "parse" not in parse_data:
+            return f"暫時無法取得《{poem_name}》的內容。"
 
-            # 檢查是否為「消歧義頁面」（例如有多個朝代或作者同名）
-            catlinks = soup.find("div", id="catlinks")
-            is_disambig = catlinks and (
-                "消歧義" in catlinks.get_text() or "消歧义" in catlinks.get_text()
+        html_content = parse_data["parse"]["text"]["*"]
+        soup = BeautifulSoup(html_content, "html.parser")
+
+        # 移除不需要的導航、表格等區塊
+        for unwanted in soup.find_all(
+            ["table", "ul", "div"], class_=["navbox", "ambox", "toc", "printfooter"]
+        ):
+            unwanted.decompose()
+
+        # 萃取內文
+        raw_text = soup.get_text()
+        clean_lines = [line.strip() for line in raw_text.split("\n") if line.strip()]
+        content_body = "\n".join(clean_lines[:40])
+
+        if content_body:
+            return (
+                multiple_hint
+                + f"《{s2t.convert(best_title)}》\n\n{s2t.convert(content_body)}"
             )
-
-            if is_disambig and main_output:
-                li_tags = main_output.find_all("li")
-                author_list = []
-                for li in li_tags:
-                    if "sisitem" in li.get("class", []):
-                        continue
-                    text = li.get_text().strip()
-                    if text and "消歧義" not in text and "消歧义" not in text:
-                        author_list.append(text)
-
-                if author_list:
-                    authors_str = "\n".join(author_list)
-                    return f"《{s2t.convert(poem_name)}》有多個版本，請輸入「詩名(作者)」精確查詢：\n\n{s2t.convert(authors_str)}"
-
-            # 3. 抓取正文內容（移除不必要的排版區塊）
-            if main_output:
-                for unwanted in main_output.find_all(
-                    ["table", "ul", "div"], class_=["navbox", "ambox", "toc"]
-                ):
-                    unwanted.decompose()
-
-                # 萃取內文段落
-                paragraphs = main_output.find_all(["p", "div"], class_=["poem", "text"])
-                if not paragraphs:
-                    # 如果沒有特定標籤，直接抓取主區塊文字
-                    raw_text = main_output.get_text()
-                else:
-                    raw_text = "\n".join([p.get_text() for p in paragraphs])
-
-                # 清理多餘空白行
-                clean_lines = [
-                    line.strip() for line in raw_text.split("\n") if line.strip()
-                ]
-                content_body = "\n".join(
-                    clean_lines[:30]
-                )  # 限制長度避免超過 LINE 訊息限制
-
-                if content_body:
-                    return (
-                        f"《{s2t.convert(best_title)}》\n\n{s2t.convert(content_body)}"
-                    )
 
     except Exception as e:
         print(f"Error fetching from wikisource: {e}")
