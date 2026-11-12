@@ -1,0 +1,36 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyright/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Local environment variables and credentials
+.env
+.env.*
+!.env.example
+**/Key.txt
+
+# Local logs and build output
+*.log
+build/
+dist/
+*.egg-info/
+
+# Local ngrok executable and downloaded archives
+ngrok/
+ngrok.exe
+ngrok*.zip
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
